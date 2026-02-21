@@ -25,7 +25,49 @@ const categories = new Set(['public-goods', 'defi', 'nft', 'social', 'infrastruc
 // ============================================================================
 
 // Add project to registry (self-register)
-app.post('/projects', (req, res) => {
+
+// ============================================================================
+// WHITELIST MIDDLEWARE
+// ============================================================================
+
+let _whitelistCache = null;
+let _whitelistCacheTime = 0;
+const WHITELIST_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+async function fetchWhitelist() {
+  const now = Date.now();
+  if (_whitelistCache && (now - _whitelistCacheTime) < WHITELIST_CACHE_TTL) {
+    return _whitelistCache;
+  }
+  try {
+    const res = await fetch('https://www.owockibot.xyz/api/whitelist');
+    const data = await res.json();
+    _whitelistCache = new Set(data.map(e => (e.address || e).toLowerCase()));
+    _whitelistCacheTime = now;
+    return _whitelistCache;
+  } catch (err) {
+    console.error('Whitelist fetch failed:', err.message);
+    if (_whitelistCache) return _whitelistCache;
+    return new Set();
+  }
+}
+
+function requireWhitelist(addressField = 'address') {
+  return async (req, res, next) => {
+    const addr = req.body?.[addressField] || req.body?.creator || req.body?.participant || req.body?.sender || req.body?.from || req.body?.address;
+    if (!addr) {
+      return res.status(400).json({ error: 'Address required' });
+    }
+    const whitelist = await fetchWhitelist();
+    if (!whitelist.has(addr.toLowerCase())) {
+      return res.status(403).json({ error: 'Invite-only. Tag @owockibot on X to request access.' });
+    }
+    next();
+  };
+}
+
+
+app.post('/projects', requireWhitelist(), (req, res) => {
   const { name, description, url, category, owner, logo, tags } = req.body;
 
   if (!name || !owner) {
@@ -134,7 +176,7 @@ app.get('/projects/:id', (req, res) => {
 });
 
 // Update project (owner only - trusted for now)
-app.put('/projects/:id', (req, res) => {
+app.put('/projects/:id', requireWhitelist(), (req, res) => {
   const project = projects.get(req.params.id);
   if (!project) return res.status(404).json({ error: 'Project not found' });
 
@@ -183,7 +225,7 @@ app.delete('/projects/:id', (req, res) => {
 // ============================================================================
 
 // Signal support for a project
-app.post('/projects/:id/signal', (req, res) => {
+app.post('/projects/:id/signal', requireWhitelist(), (req, res) => {
   const project = projects.get(req.params.id);
   if (!project) return res.status(404).json({ error: 'Project not found' });
 
